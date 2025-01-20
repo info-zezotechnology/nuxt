@@ -1,3 +1,7 @@
+export interface ComponentMeta {
+  [key: string]: unknown
+}
+
 export interface Component {
   pascalName: string
   kebabName: string
@@ -7,8 +11,9 @@ export interface Component {
   chunkName: string
   prefetch: boolean
   preload: boolean
-  global?: boolean
+  global?: boolean | 'sync'
   island?: boolean
+  meta?: ComponentMeta
   mode?: 'client' | 'server' | 'all'
   /**
    * This number allows configuring the behavior of overriding Nuxt components.
@@ -16,6 +21,13 @@ export interface Component {
    * components will be used instead of lower priority components.
    */
   priority?: number
+  /**
+   * Allow bypassing client/server transforms for internal Nuxt components like
+   * ServerPlaceholder and NuxtClientFallback.
+   *
+   * @internal
+   */
+  _raw?: boolean
 }
 
 export interface ScanDir {
@@ -41,7 +53,7 @@ export interface ScanDir {
    */
   pathPrefix?: boolean
   /**
-   * Ignore scanning this directory if set to `true`
+   * Ignore scanning this directory if set to `false`
    */
   enabled?: boolean
   /**
@@ -85,6 +97,14 @@ export interface ComponentsDir extends ScanDir {
    * By default ('auto') it will set transpile: true if node_modules/ is in path.
    */
   transpile?: 'auto' | boolean
+  /**
+   * This number allows configuring the behavior of overriding Nuxt components.
+   * It will be inherited by any components within the directory.
+   *
+   * If multiple components are provided with the same name, then higher priority
+   * components will be used instead of lower priority components.
+   */
+  priority?: number
 }
 
 export interface ComponentsOptions {
@@ -96,10 +116,14 @@ export interface ComponentsOptions {
    * but they can also be used dynamically, for example `<component :is="`icon-${myIcon}`">`.
    *
    * This can be overridden by an individual component directory entry.
-   *
    * @default false
    */
   global?: boolean
+  /**
+   * Whether to write metadata to the build directory with information about the components that
+   * are auto-registered in your app.
+   */
+  generateMetadata?: boolean
   loader?: boolean
 
   transform?: {

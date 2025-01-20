@@ -6,8 +6,7 @@ export default defineUntypedSchema({
    *
    * Any components in the directories configured here can be used throughout your
    * pages, layouts (and other components) without needing to explicitly import them.
-   *
-   * @see https://nuxt.com/docs/guide/directory-structure/components
+   * @see [`components/` directory documentation](https://nuxt.com/docs/guide/directory-structure/components)
    * @type {boolean | typeof import('../src/types/components').ComponentsOptions | typeof import('../src/types/components').ComponentsOptions['dirs']}
    */
   components: {
@@ -19,17 +18,21 @@ export default defineUntypedSchema({
         return { dirs: [{ path: '~/components/global', global: true }, '~/components'] }
       }
       return val
-    }
+    },
   },
 
   /**
    * Configure how Nuxt auto-imports composables into your application.
-   *
-   * @see [Nuxt 3 documentation](https://nuxt.com/docs/guide/directory-structure/composables)
+   * @see [Nuxt documentation](https://nuxt.com/docs/guide/directory-structure/composables)
    * @type {typeof import('../src/types/imports').ImportsOptions}
    */
   imports: {
     global: false,
+    /**
+     * Whether to scan your `composables/` and `utils/` directories for composables to auto-import.
+     * Auto-imports registered by Nuxt or other modules, such as imports from `vue` or `nuxt`, will still be enabled.
+     */
+    scan: true,
 
     /**
      * An array of custom directories that will be auto-imported.
@@ -42,35 +45,29 @@ export default defineUntypedSchema({
      * }
      * ```
      */
-    dirs: []
+    dirs: [],
   },
 
   /**
    * Whether to use the vue-router integration in Nuxt 3. If you do not provide a value it will be
    * enabled if you have a `pages/` directory in your source folder.
-   *
    * @type {boolean}
    */
   pages: undefined,
 
   /**
    * Manually disable nuxt telemetry.
-   *
    * @see [Nuxt Telemetry](https://github.com/nuxt/telemetry) for more information.
-   *
-   * @type {typeof import('@nuxt/telemetry').ModuleOptions}
-  */
+   * @type {boolean | Record<string, any>}
+   */
   telemetry: undefined,
 
   /**
    * Enable Nuxt DevTools for development.
-   * 
-   * This is an experimental feature.
+   *
    * Breaking changes for devtools might not reflect on the version of Nuxt.
-   * 
-   * @see  [Nuxt DevTools](https://devtools.nuxtjs.org/) for more information.
-   * @experimental
-   * @type {boolean | { enabled: boolean }}
+   * @see  [Nuxt DevTools](https://devtools.nuxt.com/) for more information.
+   * @type { { enabled: boolean, [key: string]: any } }
    */
-  devtools: false
+  devtools: {},
 })

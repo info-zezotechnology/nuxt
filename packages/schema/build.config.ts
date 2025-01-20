@@ -1,4 +1,5 @@
 import { defineBuildConfig } from 'unbuild'
+import { stubOptions } from '../../debug/build-config'
 
 export default defineBuildConfig({
   declaration: true,
@@ -9,43 +10,65 @@ export default defineBuildConfig({
       name: 'config',
       builder: 'untyped',
       defaults: {
+        srcDir: '/<srcDir>/',
+        workspaceDir: '/<workspaceDir>/',
         rootDir: '/<rootDir>/',
         vite: {
-          base: '/'
-        }
-      }
+          base: '/',
+        },
+      },
     },
     'src/index',
-    'src/builder-env'
+    'src/builder-env',
   ],
+  stubOptions,
+  rollup: {
+    dts: { respectExternal: false },
+    inlineDependencies: ['untyped', 'knitwork'],
+  },
   externals: [
     // Type imports
-    'vue-router',
-    '@nuxt/telemetry',
-    'vue-bundle-renderer',
     '@unhead/schema',
-    'vue',
-    'unctx',
+    '@vitejs/plugin-vue',
+    'chokidar',
+    '@vitejs/plugin-vue-jsx',
+    '@vue/language-core',
+    'autoprefixer',
+    'c12',
+    'compatx',
+    'consola',
+    'css-minimizer-webpack-plugin',
+    'cssnano',
+    'esbuild-loader',
+    'file-loader',
+    'h3',
     'hookable',
+    'ignore',
+    'mini-css-extract-plugin',
+    'nitro',
     'nitropack',
+    'nuxt/app',
+    'ofetch',
+    'pkg-types',
+    'postcss',
+    'pug',
+    'rollup-plugin-visualizer',
+    'sass-loader',
+    'scule',
+    'unctx',
+    'unimport',
+    'vite',
+    'vue',
+    'vue-bundle-renderer',
+    'vue-loader',
+    'vue-router',
     'webpack',
     'webpack-bundle-analyzer',
-    'rollup-plugin-visualizer',
-    'vite',
-    '@vitejs/plugin-vue',
-    '@vitejs/plugin-vue-jsx',
-    'mini-css-extract-plugin',
-    'terser-webpack-plugin',
-    'css-minimizer-webpack-plugin',
     'webpack-dev-middleware',
-    'h3',
     'webpack-hot-middleware',
-    'postcss',
-    'consola',
-    'ignore',
     // Implicit
     '@vue/compiler-core',
+    '@vue/compiler-sfc',
     '@vue/shared',
-    'untyped'
-  ]
+  ],
 })

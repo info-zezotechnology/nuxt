@@ -5,10 +5,20 @@ import { useNuxtApp } from './nuxt'
 // @ts-expect-error virtual file
 import __appConfig from '#build/app.config.mjs'
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 type DeepPartial<T> = T extends Function ? T : T extends Record<string, any> ? { [P in keyof T]?: DeepPartial<T[P]> } : T
 
 // Workaround for vite HMR with virtual modules
 export const _getAppConfig = () => __appConfig as AppConfig
+
+function isPojoOrArray (val: unknown): val is object {
+  return (
+    Array.isArray(val) ||
+    (!!val &&
+      typeof val === 'object' &&
+      val.constructor?.name === 'Object')
+  )
+}
 
 function deepDelete (obj: any, newObj: any) {
   for (const key in obj) {
@@ -17,7 +27,7 @@ function deepDelete (obj: any, newObj: any) {
       delete (obj as any)[key]
     }
 
-    if (val !== null && typeof val === 'object') {
+    if (isPojoOrArray(val)) {
       deepDelete(obj[key], newObj[key])
     }
   }
@@ -26,8 +36,9 @@ function deepDelete (obj: any, newObj: any) {
 function deepAssign (obj: any, newObj: any) {
   for (const key in newObj) {
     const val = newObj[key]
-    if (val !== null && typeof val === 'object') {
-      obj[key] = obj[key] || {}
+    if (isPojoOrArray(val)) {
+      const defaultVal = Array.isArray(val) ? [] : {}
+      obj[key] = obj[key] || defaultVal
       deepAssign(obj[key], val)
     } else {
       obj[key] = val
@@ -38,7 +49,7 @@ function deepAssign (obj: any, newObj: any) {
 export function useAppConfig (): AppConfig {
   const nuxtApp = useNuxtApp()
   if (!nuxtApp._appConfig) {
-    nuxtApp._appConfig = (process.server ? klona(__appConfig) : reactive(__appConfig)) as AppConfig
+    nuxtApp._appConfig = (import.meta.server ? klona(__appConfig) : reactive(__appConfig)) as AppConfig
   }
   return nuxtApp._appConfig
 }
@@ -54,8 +65,8 @@ export function updateAppConfig (appConfig: DeepPartial<AppConfig>) {
 }
 
 // HMR Support
-if (process.dev) {
-  function applyHMR (newConfig: AppConfig) {
+if (import.meta.dev) {
+  const applyHMR = (newConfig: AppConfig) => {
     const appConfig = useAppConfig()
     if (newConfig && appConfig) {
       deepAssign(appConfig, newConfig)

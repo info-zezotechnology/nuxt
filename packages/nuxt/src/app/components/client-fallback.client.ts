@@ -1,36 +1,33 @@
-import { createElementBlock, defineComponent, onMounted, ref } from 'vue'
+import { createElementBlock, defineComponent, onMounted, ref, useId } from 'vue'
 import { useState } from '../composables/state'
 
 export default defineComponent({
   name: 'NuxtClientFallback',
   inheritAttrs: false,
   props: {
-    uid: {
-      type: String
-    },
     fallbackTag: {
       type: String,
-      default: () => 'div'
+      default: () => 'div',
     },
     fallback: {
       type: String,
-      default: () => ''
+      default: () => '',
     },
     placeholder: {
-      type: String
+      type: String,
     },
     placeholderTag: {
-      type: String
+      type: String,
     },
     keepFallback: {
       type: Boolean,
-      default: () => false
-    }
+      default: () => false,
+    },
   },
   emits: ['ssr-error'],
   setup (props, ctx) {
     const mounted = ref(false)
-    const ssrFailed = useState(`${props.uid}`)
+    const ssrFailed = useState(useId())
 
     if (ssrFailed.value) {
       onMounted(() => { mounted.value = true })
@@ -48,5 +45,5 @@ export default defineComponent({
       }
       return ctx.slots.default?.()
     }
-  }
+  },
 })

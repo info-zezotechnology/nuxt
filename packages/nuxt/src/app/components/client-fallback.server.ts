@@ -1,5 +1,7 @@
-import { defineComponent, getCurrentInstance, onErrorCaptured, ref } from 'vue'
+import { defineComponent, getCurrentInstance, onErrorCaptured, ref, useId } from 'vue'
 import { ssrRenderAttrs, ssrRenderSlot, ssrRenderVNode } from 'vue/server-renderer'
+
+import { isPromise } from '@vue/shared'
 import { useState } from '../composables/state'
 import { createBuffer } from './utils'
 
@@ -7,37 +9,39 @@ const NuxtClientFallbackServer = defineComponent({
   name: 'NuxtClientFallback',
   inheritAttrs: false,
   props: {
-    uid: {
-      type: String
-    },
     fallbackTag: {
       type: String,
-      default: () => 'div'
+      default: () => 'div',
     },
     fallback: {
       type: String,
-      default: () => ''
+      default: () => '',
     },
     placeholder: {
-      type: String
+      type: String,
     },
     placeholderTag: {
-      type: String
+      type: String,
     },
     keepFallback: {
       type: Boolean,
-      default: () => false
-    }
+      default: () => false,
+    },
   },
-  emits: ['ssr-error'],
-  setup (props, ctx) {
+  emits: {
+    'ssr-error' (_error: unknown) {
+      return true
+    },
+  },
+  async setup (_, ctx) {
     const vm = getCurrentInstance()
     const ssrFailed = ref(false)
+    const error = useState<boolean | undefined>(useId())
 
-    onErrorCaptured(() => {
-      useState(`${props.uid}`, () => true)
+    onErrorCaptured((err) => {
+      error.value = true
       ssrFailed.value = true
-      ctx.emit('ssr-error')
+      ctx.emit('ssr-error', err)
       return false
     })
 
@@ -45,15 +49,22 @@ const NuxtClientFallbackServer = defineComponent({
       const defaultSlot = ctx.slots.default?.()
       const ssrVNodes = createBuffer()
 
-      for (let i = 0; i < (defaultSlot?.length || 0); i++) {
-        ssrRenderVNode(ssrVNodes.push, defaultSlot![i], vm!)
+      if (defaultSlot) {
+        for (let i = 0; i < defaultSlot.length; i++) {
+          ssrRenderVNode(ssrVNodes.push, defaultSlot[i]!, vm!)
+        }
+      }
+
+      const buffer = ssrVNodes.getBuffer()
+      if (buffer.hasAsync) {
+        await Promise.all(buffer.filter(isPromise))
       }
 
       return { ssrFailed, ssrVNodes }
-    } catch {
+    } catch (ssrError) {
       // catch in dev
-      useState(`${props.uid}`, () => true)
-      ctx.emit('ssr-error')
+      error.value = true
+      ctx.emit('ssr-error', ssrError)
       return { ssrFailed: true, ssrVNodes: [] }
     }
   },
@@ -73,7 +84,7 @@ const NuxtClientFallbackServer = defineComponent({
       push(ctx.ssrVNodes.getBuffer())
       push('<!--]-->')
     }
-  }
+  },
 })
 
 export default NuxtClientFallbackServer

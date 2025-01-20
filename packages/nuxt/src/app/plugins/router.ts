@@ -1,13 +1,16 @@
-import { h, isReadonly, reactive } from 'vue'
-import { isEqual, joinURL, parseQuery, parseURL, stringifyParsedURL, stringifyQuery, withoutBase } from 'ufo'
+import type { Ref } from 'vue'
+import { computed, defineComponent, h, isReadonly, reactive } from 'vue'
+import { isEqual, joinURL, parseQuery, stringifyParsedURL, stringifyQuery, withoutBase } from 'ufo'
 import { createError } from 'h3'
 import { defineNuxtPlugin, useRuntimeConfig } from '../nuxt'
+import { getRouteRules } from '../composables/manifest'
 import { clearError, showError } from '../composables/error'
 import { navigateTo } from '../composables/router'
-import { useState } from '../composables/state'
 
 // @ts-expect-error virtual file
 import { globalMiddleware } from '#build/middleware'
+// @ts-expect-error virtual file
+import { appManifest as isAppManifestEnabled } from '#build/nuxt.config.mjs'
 
 interface Route {
   /** Percentage encoded pathname section of the URL. */
@@ -38,11 +41,11 @@ function getRouteFromPath (fullPath: string | Partial<Route>) {
     fullPath = stringifyParsedURL({
       pathname: fullPath.path || '',
       search: stringifyQuery(fullPath.query || {}),
-      hash: fullPath.hash || ''
+      hash: fullPath.hash || '',
     })
   }
 
-  const url = parseURL(fullPath.toString())
+  const url = new URL(fullPath.toString(), import.meta.client ? window.location.href : 'http://localhost')
   return {
     path: url.pathname,
     fullPath,
@@ -54,11 +57,11 @@ function getRouteFromPath (fullPath: string | Partial<Route>) {
     matched: [],
     redirectedFrom: undefined,
     meta: {},
-    href: fullPath
+    href: fullPath,
   }
 }
 
-type RouteGuardReturn = void | Error | string | false
+type RouteGuardReturn = void | Error | string | boolean
 
 interface RouteGuard {
   (to: Route, from: Route): RouteGuardReturn | Promise<RouteGuardReturn>
@@ -72,9 +75,9 @@ interface RouterHooks {
 }
 
 interface Router {
-  currentRoute: Route
+  currentRoute: Ref<Route>
   isReady: () => Promise<void>
-  options: {}
+  options: Record<string, unknown>
   install: () => Promise<void>
   // Navigation
   push: (url: string) => Promise<void>
@@ -99,7 +102,7 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
   name: 'nuxt:router',
   enforce: 'pre',
   setup (nuxtApp) {
-    const initialURL = process.client
+    const initialURL = import.meta.client
       ? withoutBase(window.location.pathname, useRuntimeConfig().app.baseURL) + window.location.search + window.location.hash
       : nuxtApp.ssrContext!.url
 
@@ -109,7 +112,7 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
       'navigate:before': [],
       'resolve:before': [],
       'navigate:after': [],
-      error: []
+      'error': [],
     }
 
     const registerHook = <T extends keyof RouterHooks> (hook: T, guard: RouterHooks[T]) => {
@@ -130,7 +133,7 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
           // Cancel navigation
           if (result === false || result instanceof Error) { return }
           // Redirect
-          if (result) { return handleNavigation(result, true) }
+          if (typeof result === 'string' && result.length) { return handleNavigation(result, true) }
         }
 
         for (const handler of hooks['resolve:before']) {
@@ -138,7 +141,7 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
         }
         // Perform navigation
         Object.assign(route, to)
-        if (process.client) {
+        if (import.meta.client) {
           window.history[replace ? 'replaceState' : 'pushState']({}, '', joinURL(baseURL, to.fullPath))
           if (!nuxtApp.isHydrating) {
             // Clear any existing errors
@@ -150,7 +153,7 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
           await middleware(to, route)
         }
       } catch (err) {
-        if (process.dev && !hooks.error.length) {
+        if (import.meta.dev && !hooks.error.length) {
           console.warn('No error handlers registered to handle middleware errors. You can register an error handler with `router.onError()`', err)
         }
         for (const handler of hooks.error) {
@@ -159,8 +162,10 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
       }
     }
 
+    const currentRoute = computed(() => route)
+
     const router: Router = {
-      currentRoute: route,
+      currentRoute,
       isReady: () => Promise.resolve(),
       // These options provide a similar API to vue-router but have no effect
       options: {},
@@ -186,70 +191,97 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
         if (index !== -1) {
           routes.splice(index, 1)
         }
-      }
+      },
     }
 
-    nuxtApp.vueApp.component('RouterLink', {
+    nuxtApp.vueApp.component('RouterLink', defineComponent({
       functional: true,
       props: {
-        to: String,
+        to: {
+          type: String,
+          required: true,
+        },
         custom: Boolean,
         replace: Boolean,
         // Not implemented
         activeClass: String,
         exactActiveClass: String,
-        ariaCurrentValue: String
+        ariaCurrentValue: String,
       },
       setup: (props, { slots }) => {
-        const navigate = () => handleNavigation(props.to, props.replace)
+        const navigate = () => handleNavigation(props.to!, props.replace)
         return () => {
-          const route = router.resolve(props.to)
+          const route = router.resolve(props.to!)
           return props.custom
             ? slots.default?.({ href: props.to, navigate, route })
             : h('a', { href: props.to, onClick: (e: MouseEvent) => { e.preventDefault(); return navigate() } }, slots)
         }
-      }
-    })
+      },
+    }))
 
-    if (process.client) {
+    if (import.meta.client) {
       window.addEventListener('popstate', (event) => {
         const location = (event.target as Window).location
         router.replace(location.href.replace(location.origin, ''))
       })
     }
 
+    // @ts-expect-error vue-router types diverge from our Route type above
     nuxtApp._route = route
 
     // Handle middleware
     nuxtApp._middleware = nuxtApp._middleware || {
       global: [],
-      named: {}
+      named: {},
     }
 
-    const initialLayout = useState('_layout')
+    const initialLayout = nuxtApp.payload.state._layout
     nuxtApp.hooks.hookOnce('app:created', async () => {
       router.beforeEach(async (to, from) => {
         to.meta = reactive(to.meta || {})
-        if (nuxtApp.isHydrating && initialLayout.value && !isReadonly(to.meta.layout)) {
-          to.meta.layout = initialLayout.value
+        if (nuxtApp.isHydrating && initialLayout && !isReadonly(to.meta.layout)) {
+          to.meta.layout = initialLayout
         }
         nuxtApp._processingMiddleware = true
 
-        const middlewareEntries = new Set<RouteGuard>([...globalMiddleware, ...nuxtApp._middleware.global])
+        if (import.meta.client || !nuxtApp.ssrContext?.islandContext) {
+          const middlewareEntries = new Set<RouteGuard>([...globalMiddleware, ...nuxtApp._middleware.global])
 
-        for (const middleware of middlewareEntries) {
-          const result = await nuxtApp.runWithContext(() => middleware(to, from))
-          if (process.server) {
-            if (result === false || result instanceof Error) {
-              const error = result || createError({
-                statusCode: 404,
-                statusMessage: `Page Not Found: ${initialURL}`
-              })
-              delete nuxtApp._processingMiddleware
-              return nuxtApp.runWithContext(() => showError(error))
+          if (isAppManifestEnabled) {
+            const routeRules = await nuxtApp.runWithContext(() => getRouteRules({ path: to.path }))
+
+            if (routeRules.appMiddleware) {
+              for (const key in routeRules.appMiddleware) {
+                const guard = nuxtApp._middleware.named[key] as RouteGuard | undefined
+                if (!guard) { return }
+
+                if (routeRules.appMiddleware[key]) {
+                  middlewareEntries.add(guard)
+                } else {
+                  middlewareEntries.delete(guard)
+                }
+              }
             }
           }
-          if (result || result === false) { return result }
+
+          for (const middleware of middlewareEntries) {
+            const result = await nuxtApp.runWithContext(() => middleware(to, from))
+            if (import.meta.server) {
+              if (result === false || result instanceof Error) {
+                const error = result || createError({
+                  statusCode: 404,
+                  statusMessage: `Page Not Found: ${initialURL}`,
+                  data: {
+                    path: initialURL,
+                  },
+                })
+                delete nuxtApp._processingMiddleware
+                return nuxtApp.runWithContext(() => showError(error))
+              }
+            }
+            if (result === true) { continue }
+            if (result || result === false) { return result }
+          }
         }
       })
 
@@ -264,8 +296,8 @@ export default defineNuxtPlugin<{ route: Route, router: Router }>({
     return {
       provide: {
         route,
-        router
-      }
+        router,
+      },
     }
-  }
+  },
 })

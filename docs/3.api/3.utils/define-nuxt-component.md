@@ -1,17 +1,22 @@
 ---
 title: "defineNuxtComponent"
 description: defineNuxtComponent() is a helper function for defining type safe components with Options API.
+links:
+  - label: Source
+    icon: i-simple-icons-github
+    to: https://github.com/nuxt/nuxt/blob/main/packages/nuxt/src/app/composables/component.ts
+    size: xs
 ---
 
-# `defineNuxtComponent`
+::note
+`defineNuxtComponent()` is a helper function for defining type safe Vue components using options API similar to [`defineComponent()`](https://vuejs.org/api/general.html#definecomponent). `defineNuxtComponent()` wrapper also adds support for `asyncData` and `head` component options.
+::
 
-`defineNuxtComponent()` is a helper function for defining type safe Vue components using options API similar to [defineComponent()](https://vuejs.org/api/general.html#definecomponent). `defineNuxtComponent()` wrapper also adds support for `asyncData` and `head` component options.
-
-::Alert
+::note
 Using `<script setup lang="ts">` is the recommended way of declaring Vue components in Nuxt 3.
 ::
 
-:ReadMore{link=/docs/getting-started/data-fetching#options-api-support}
+:read-more{to=/docs/getting-started/data-fetching}
 
 ## `asyncData()`
 

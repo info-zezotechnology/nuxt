@@ -1,27 +1,49 @@
 import { reactive, ref, shallowReactive, shallowRef } from 'vue'
-import { definePayloadReviver, getNuxtClientPayload } from '#app/composables/payload'
-import { createError } from '#app/composables/error'
-import { defineNuxtPlugin } from '#app/nuxt'
+import destr from 'destr'
+import { definePayloadReviver, getNuxtClientPayload } from '../composables/payload'
+import { createError } from '../composables/error'
+import { defineNuxtPlugin, useNuxtApp } from '../nuxt'
 
-const revivers = {
-  NuxtError: (data: any) => createError(data),
-  EmptyShallowRef: (data: any) => shallowRef(data === '_' ? undefined : JSON.parse(data)),
-  EmptyRef: (data: any) => ref(data === '_' ? undefined : JSON.parse(data)),
-  ShallowRef: (data: any) => shallowRef(data),
-  ShallowReactive: (data: any) => shallowReactive(data),
-  Ref: (data: any) => ref(data),
-  Reactive: (data: any) => reactive(data)
+// @ts-expect-error Virtual file.
+import { componentIslands } from '#build/nuxt.config.mjs'
+
+const revivers: [string, (data: any) => any][] = [
+  ['NuxtError', data => createError(data)],
+  ['EmptyShallowRef', data => shallowRef(data === '_' ? undefined : data === '0n' ? BigInt(0) : destr(data))],
+  ['EmptyRef', data => ref(data === '_' ? undefined : data === '0n' ? BigInt(0) : destr(data))],
+  ['ShallowRef', data => shallowRef(data)],
+  ['ShallowReactive', data => shallowReactive(data)],
+  ['Ref', data => ref(data)],
+  ['Reactive', data => reactive(data)],
+]
+
+if (componentIslands) {
+  revivers.push(['Island', ({ key, params, result }: any) => {
+    const nuxtApp = useNuxtApp()
+    if (!nuxtApp.isHydrating) {
+      nuxtApp.payload.data[key] = nuxtApp.payload.data[key] || $fetch(`/__nuxt_island/${key}.json`, {
+        responseType: 'json',
+        ...params ? { params } : {},
+      }).then((r) => {
+        nuxtApp.payload.data[key] = r
+        return r
+      })
+    }
+    return {
+      html: '',
+      ...result,
+    }
+  }])
 }
 
 export default defineNuxtPlugin({
   name: 'nuxt:revive-payload:client',
   order: -30,
   async setup (nuxtApp) {
-    for (const reviver in revivers) {
-      definePayloadReviver(reviver, revivers[reviver as keyof typeof revivers])
+    for (const [reviver, fn] of revivers) {
+      definePayloadReviver(reviver, fn)
     }
     Object.assign(nuxtApp.payload, await nuxtApp.runWithContext(getNuxtClientPayload))
-    // For backwards compatibility - TODO: remove later
-    window.__NUXT__ = nuxtApp.payload
-  }
+    delete window.__NUXT__
+  },
 })

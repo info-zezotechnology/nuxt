@@ -1,3 +1,4 @@
-# Nuxt 3 Examples
+# Nuxt Examples
 
-👉 https://nuxt.com/docs/examples
+- 👉 See examples in your browser at https://nuxt.com/docs/examples
+- 👉 View on GitHub at https://github.com/nuxt/examples

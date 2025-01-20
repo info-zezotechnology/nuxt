@@ -1,39 +1,40 @@
-import { isAbsolute } from 'pathe'
-import webpack from 'webpack'
+import { isAbsolute, resolve } from 'pathe'
 import ForkTSCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin'
 import { logger } from '@nuxt/kit'
 import type { WebpackConfigContext } from '../utils/config'
-import { applyPresets, getWebpackConfig } from '../utils/config'
+import { applyPresets } from '../utils/config'
 import { nuxt } from '../presets/nuxt'
 import { node } from '../presets/node'
+import { webpack } from '#builder'
 
-const assetPattern = /\.(css|s[ca]ss|png|jpe?g|gif|svg|woff2?|eot|ttf|otf|webp|webm|mp4|ogv)(\?.*)?$/i
+const assetPattern = /\.(?:css|s[ca]ss|png|jpe?g|gif|svg|woff2?|eot|ttf|otf|webp|webm|mp4|ogv)(?:\?.*)?$/i
 
-export function server (ctx: WebpackConfigContext) {
+export async function server (ctx: WebpackConfigContext) {
   ctx.name = 'server'
   ctx.isServer = true
 
-  applyPresets(ctx, [
+  await applyPresets(ctx, [
     nuxt,
     node,
     serverStandalone,
     serverPreset,
-    serverPlugins
+    serverPlugins,
   ])
-
-  return getWebpackConfig(ctx)
 }
 
 function serverPreset (ctx: WebpackConfigContext) {
-  const { config } = ctx
+  ctx.config.output!.filename = 'server.mjs'
 
-  config.output!.filename = 'server.mjs'
+  if (ctx.nuxt.options.sourcemap.server) {
+    const prefix = ctx.nuxt.options.sourcemap.server === 'hidden' ? 'hidden-' : ''
+    ctx.config.devtool = prefix + ctx.isDev ? 'cheap-module-source-map' : 'source-map'
+  } else {
+    ctx.config.devtool = false
+  }
 
-  config.devtool = ctx.nuxt.options.sourcemap.server ? ctx.isDev ? 'cheap-module-source-map' : 'source-map' : false
-
-  config.optimization = {
+  ctx.config.optimization = {
     splitChunks: false,
-    minimize: false
+    minimize: false,
   }
 }
 
@@ -44,14 +45,22 @@ function serverStandalone (ctx: WebpackConfigContext) {
     '#app',
     'nuxt',
     'nuxt3',
+    'nuxt-nightly',
     '!',
     '-!',
     '~',
     '@/',
     '#',
-    ...ctx.options.build.transpile
+    ...ctx.options.build.transpile,
   ]
-  const external = ['#internal/nitro']
+  const external = [
+    'nitro/runtime',
+    '#shared',
+    resolve(ctx.nuxt.options.rootDir, ctx.nuxt.options.dir.shared),
+  ]
+  if (!ctx.nuxt.options.dev) {
+    external.push('#internal/nuxt/paths', '#internal/nuxt/app-config', '#app-manifest')
+  }
 
   if (!Array.isArray(ctx.config.externals)) { return }
   ctx.config.externals.push(({ request }, cb) => {
@@ -76,22 +85,20 @@ function serverStandalone (ctx: WebpackConfigContext) {
 }
 
 function serverPlugins (ctx: WebpackConfigContext) {
-  const { config, options } = ctx
-
-  config.plugins = config.plugins || []
+  ctx.config.plugins ||= []
 
   // Server polyfills
-  if (options.webpack.serverURLPolyfill) {
-    config.plugins.push(new webpack.ProvidePlugin({
-      URL: [options.webpack.serverURLPolyfill, 'URL'],
-      URLSearchParams: [options.webpack.serverURLPolyfill, 'URLSearchParams']
+  if (ctx.userConfig.serverURLPolyfill) {
+    ctx.config.plugins.push(new webpack.ProvidePlugin({
+      URL: [ctx.userConfig.serverURLPolyfill, 'URL'],
+      URLSearchParams: [ctx.userConfig.serverURLPolyfill, 'URLSearchParams'],
     }))
   }
 
   // Add type-checking
-  if (ctx.nuxt.options.typescript.typeCheck === true || (ctx.nuxt.options.typescript.typeCheck === 'build' && !ctx.nuxt.options.dev)) {
-    config.plugins!.push(new ForkTSCheckerWebpackPlugin({
-      logger
+  if (!ctx.nuxt.options.test && (ctx.nuxt.options.typescript.typeCheck === true || (ctx.nuxt.options.typescript.typeCheck === 'build' && !ctx.nuxt.options.dev))) {
+    ctx.config.plugins!.push(new ForkTSCheckerWebpackPlugin({
+      logger,
     }))
   }
 }

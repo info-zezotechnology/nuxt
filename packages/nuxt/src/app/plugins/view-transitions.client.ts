@@ -1,16 +1,27 @@
-import { useRouter } from '#app/composables/router'
-import { defineNuxtPlugin } from '#app/nuxt'
+import { isChangingPage } from '../components/utils'
+import { useRouter } from '../composables/router'
+import { defineNuxtPlugin } from '../nuxt'
+// @ts-expect-error virtual file
+import { appViewTransition as defaultViewTransition } from '#build/nuxt.config.mjs'
 
 export default defineNuxtPlugin((nuxtApp) => {
-  if (!document.startViewTransition) { return }
+  if (!document.startViewTransition) {
+    return
+  }
 
   let finishTransition: undefined | (() => void)
   let abortTransition: undefined | (() => void)
 
   const router = useRouter()
 
-  router.beforeResolve((to) => {
-    if (to.meta.pageTransition === false) { return }
+  router.beforeResolve(async (to, from) => {
+    const viewTransitionMode = to.meta.viewTransition ?? defaultViewTransition
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const prefersNoTransition = prefersReducedMotion && viewTransitionMode !== 'always'
+
+    if (viewTransitionMode === false || prefersNoTransition || !isChangingPage(to, from)) {
+      return
+    }
 
     const promise = new Promise<void>((resolve, reject) => {
       finishTransition = resolve
@@ -30,6 +41,8 @@ export default defineNuxtPlugin((nuxtApp) => {
       finishTransition = undefined
     })
 
+    await nuxtApp.callHook('page:view-transition:start', transition)
+
     return ready
   })
 
@@ -43,13 +56,3 @@ export default defineNuxtPlugin((nuxtApp) => {
     finishTransition = undefined
   })
 })
-
-declare global {
-  interface Document {
-    startViewTransition?: (callback: () => Promise<void> | void) => {
-      finished: Promise<void>
-      updateCallbackDone: Promise<void>
-      ready: Promise<void>
-    }
-  }
-}

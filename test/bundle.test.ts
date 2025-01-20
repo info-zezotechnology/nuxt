@@ -1,54 +1,67 @@
 import { fileURLToPath } from 'node:url'
 import fsp from 'node:fs/promises'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { execaCommand } from 'execa'
-import { globby } from 'globby'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { exec } from 'tinyexec'
+import { glob } from 'tinyglobby'
 import { join } from 'pathe'
-import { isWindows } from 'std-env'
-import { isRenderingJson } from './utils'
 
-// We only want to run this test for:
-// - ubuntu
-// - vite
-// - in our own CI
-// - using JS (default) payload rendering
-// - production build
-
-describe.skipIf(isWindows || process.env.TEST_BUILDER === 'webpack' || process.env.ECOSYSTEM_CI || !isRenderingJson || process.env.TEST_ENV === 'dev')('minimal nuxt application', () => {
+describe.skipIf(process.env.SKIP_BUNDLE_SIZE === 'true' || process.env.ECOSYSTEM_CI)('minimal nuxt application', () => {
   const rootDir = fileURLToPath(new URL('./fixtures/minimal', import.meta.url))
-  const publicDir = join(rootDir, '.output/public')
-  const serverDir = join(rootDir, '.output/server')
-
-  const stats = {
-    client: { totalBytes: 0, files: [] as string[] },
-    server: { totalBytes: 0, files: [] as string[] }
-  }
+  const pagesRootDir = fileURLToPath(new URL('./fixtures/minimal-pages', import.meta.url))
 
   beforeAll(async () => {
-    await execaCommand(`pnpm nuxi build ${rootDir}`)
+    await Promise.all([
+      exec('pnpm', ['nuxi', 'build', rootDir], { nodeOptions: { env: { EXTERNAL_VUE: 'false' } } }),
+      exec('pnpm', ['nuxi', 'build', rootDir], { nodeOptions: { env: { EXTERNAL_VUE: 'true' } } }),
+      exec('pnpm', ['nuxi', 'build', pagesRootDir]),
+    ])
   }, 120 * 1000)
 
-  afterAll(async () => {
-    await fsp.writeFile(join(rootDir, '.output/test-stats.json'), JSON.stringify(stats, null, 2))
-  })
+  // Identical behaviour between inline/external vue options as this should only affect the server build
 
   it('default client bundle size', async () => {
-    stats.client = await analyzeSizes('**/*.js', publicDir)
-    expect(roundToKilobytes(stats.client.totalBytes)).toMatchInlineSnapshot('"97.7k"')
-    expect(stats.client.files.map(f => f.replace(/\..*\.js/, '.js'))).toMatchInlineSnapshot(`
+    const [clientStats, clientStatsInlined] = await Promise.all((['.output', '.output-inline'])
+      .map(outputDir => analyzeSizes(['**/*.js'], join(rootDir, outputDir, 'public'))))
+
+    expect.soft(roundToKilobytes(clientStats!.totalBytes)).toMatchInlineSnapshot(`"116k"`)
+    expect.soft(roundToKilobytes(clientStatsInlined!.totalBytes)).toMatchInlineSnapshot(`"116k"`)
+
+    const files = new Set([...clientStats!.files, ...clientStatsInlined!.files].map(f => f.replace(/\..*\.js/, '.js')))
+
+    expect([...files]).toMatchInlineSnapshot(`
       [
         "_nuxt/entry.js",
-        "_nuxt/error-component.js",
+      ]
+    `)
+  })
+
+  it('default client bundle size (pages)', async () => {
+    const clientStats = await analyzeSizes(['**/*.js'], join(pagesRootDir, '.output/public'))
+
+    expect.soft(roundToKilobytes(clientStats!.totalBytes)).toMatchInlineSnapshot(`"175k"`)
+
+    const files = clientStats!.files.map(f => f.replace(/\..*\.js/, '.js'))
+
+    expect([...files]).toMatchInlineSnapshot(`
+      [
+        "_nuxt/a.js",
+        "_nuxt/client-component.js",
+        "_nuxt/default.js",
+        "_nuxt/entry.js",
+        "_nuxt/index.js",
+        "_nuxt/server-component.js",
       ]
     `)
   })
 
   it('default server bundle size', async () => {
-    stats.server = await analyzeSizes(['**/*.mjs', '!node_modules'], serverDir)
-    expect(roundToKilobytes(stats.server.totalBytes)).toMatchInlineSnapshot('"62.2k"')
+    const serverDir = join(rootDir, '.output/server')
 
-    const modules = await analyzeSizes('node_modules/**/*', serverDir)
-    expect(roundToKilobytes(modules.totalBytes)).toMatchInlineSnapshot('"2283k"')
+    const serverStats = await analyzeSizes(['**/*.mjs', '!node_modules'], serverDir)
+    expect.soft(roundToKilobytes(serverStats.totalBytes)).toMatchInlineSnapshot(`"210k"`)
+
+    const modules = await analyzeSizes(['node_modules/**/*'], serverDir)
+    expect.soft(roundToKilobytes(modules.totalBytes)).toMatchInlineSnapshot(`"1398k"`)
 
     const packages = modules.files
       .filter(m => m.endsWith('package.json'))
@@ -68,28 +81,84 @@ describe.skipIf(isWindows || process.env.TEST_BUILDER === 'webpack' || process.e
         "@vue/runtime-dom",
         "@vue/server-renderer",
         "@vue/shared",
-        "cookie-es",
-        "defu",
-        "destr",
+        "db0",
         "devalue",
+        "entities",
         "estree-walker",
-        "h3",
         "hookable",
-        "iron-webcrypto",
-        "klona",
-        "node-fetch-native",
-        "ofetch",
-        "ohash",
-        "pathe",
-        "radix3",
-        "scule",
+        "packrup",
         "source-map-js",
         "ufo",
-        "uncrypto",
-        "unctx",
-        "unenv",
         "unhead",
-        "unstorage",
+        "vue",
+        "vue-bundle-renderer",
+      ]
+    `)
+  })
+
+  it('default server bundle size (inlined vue modules)', async () => {
+    const serverDir = join(rootDir, '.output-inline/server')
+
+    const serverStats = await analyzeSizes(['**/*.mjs', '!node_modules'], serverDir)
+    expect.soft(roundToKilobytes(serverStats.totalBytes)).toMatchInlineSnapshot(`"560k"`)
+
+    const modules = await analyzeSizes(['node_modules/**/*'], serverDir)
+    expect.soft(roundToKilobytes(modules.totalBytes)).toMatchInlineSnapshot(`"96.4k"`)
+
+    const packages = modules.files
+      .filter(m => m.endsWith('package.json'))
+      .map(m => m.replace('/package.json', '').replace('node_modules/', ''))
+      .sort()
+    expect(packages).toMatchInlineSnapshot(`
+      [
+        "@unhead/dom",
+        "@unhead/shared",
+        "@unhead/ssr",
+        "db0",
+        "devalue",
+        "hookable",
+        "packrup",
+        "unhead",
+      ]
+    `)
+  })
+
+  it('default server bundle size (pages)', async () => {
+    const serverDir = join(pagesRootDir, '.output/server')
+
+    const serverStats = await analyzeSizes(['**/*.mjs', '!node_modules'], serverDir)
+    expect.soft(roundToKilobytes(serverStats.totalBytes)).toMatchInlineSnapshot(`"303k"`)
+
+    const modules = await analyzeSizes(['node_modules/**/*'], serverDir)
+    expect.soft(roundToKilobytes(modules.totalBytes)).toMatchInlineSnapshot(`"1398k"`)
+
+    const packages = modules.files
+      .filter(m => m.endsWith('package.json'))
+      .map(m => m.replace('/package.json', '').replace('node_modules/', ''))
+      .sort()
+    expect(packages).toMatchInlineSnapshot(`
+      [
+        "@babel/parser",
+        "@unhead/dom",
+        "@unhead/shared",
+        "@unhead/ssr",
+        "@vue/compiler-core",
+        "@vue/compiler-dom",
+        "@vue/compiler-ssr",
+        "@vue/reactivity",
+        "@vue/runtime-core",
+        "@vue/runtime-dom",
+        "@vue/server-renderer",
+        "@vue/shared",
+        "db0",
+        "devalue",
+        "entities",
+        "estree-walker",
+        "hookable",
+        "packrup",
+        "source-map-js",
+        "ufo",
+        "unhead",
         "vue",
         "vue-bundle-renderer",
       ]
@@ -97,8 +166,8 @@ describe.skipIf(isWindows || process.env.TEST_BUILDER === 'webpack' || process.e
   })
 })
 
-async function analyzeSizes (pattern: string | string[], rootDir: string) {
-  const files: string[] = await globby(pattern, { cwd: rootDir })
+async function analyzeSizes (pattern: string[], rootDir: string) {
+  const files: string[] = await glob(pattern, { cwd: rootDir })
   let totalBytes = 0
   for (const file of files) {
     const path = join(rootDir, file)

@@ -13,33 +13,38 @@ async function runLegacyAsyncData (res: Record<string, any> | Promise<Record<str
   const nuxtApp = useNuxtApp()
   const route = useRoute()
   const vm = getCurrentInstance()!
-  const { fetchKey } = vm.proxy!.$options
-  const key = typeof fetchKey === 'function' ? fetchKey(() => '') : fetchKey || route.fullPath
-  const { data, error } = await useAsyncData(`options:asyncdata:${key}`, () => nuxtApp.runWithContext(() => fn(nuxtApp)))
+  const { fetchKey, _fetchKeyBase } = vm.proxy!.$options
+  const key = (typeof fetchKey === 'function' ? fetchKey(() => '') : fetchKey) ||
+    ([_fetchKeyBase, route.fullPath, route.matched.findIndex(r => Object.values(r.components || {}).includes(vm.type))].join(':'))
+  const { data, error } = await useAsyncData(`options:asyncdata:${key}`, () => import.meta.server ? nuxtApp.runWithContext(() => fn(nuxtApp)) : fn(nuxtApp))
   if (error.value) {
     throw createError(error.value)
   }
   if (data.value && typeof data.value === 'object') {
     Object.assign(await res, toRefs(reactive(data.value)))
-  } else if (process.dev) {
+  } else if (import.meta.dev) {
     console.warn('[nuxt] asyncData should return an object', data)
   }
 }
 
+/** @since 3.0.0 */
+/* @__NO_SIDE_EFFECTS__ */
 export const defineNuxtComponent: typeof defineComponent =
-  function defineNuxtComponent (options: any): any {
+  function defineNuxtComponent (...args: any[]): any {
+    const [options, key] = args
     const { setup } = options
 
     // Avoid wrapping if no options api is used
     if (!setup && !options.asyncData && !options.head) {
       return {
         [NuxtComponentIndicator]: true,
-        ...options
+        ...options,
       }
     }
 
     return {
       [NuxtComponentIndicator]: true,
+      _fetchKeyBase: key,
       ...options,
       setup (props, ctx) {
         const nuxtApp = useNuxtApp()
@@ -51,7 +56,6 @@ export const defineNuxtComponent: typeof defineComponent =
         }
 
         if (options.head) {
-          const nuxtApp = useNuxtApp()
           useHead(typeof options.head === 'function' ? () => options.head(nuxtApp) : options.head)
         }
 
@@ -61,6 +65,6 @@ export const defineNuxtComponent: typeof defineComponent =
           .finally(() => {
             promises.length = 0
           })
-      }
+      },
     } as DefineComponent
   }

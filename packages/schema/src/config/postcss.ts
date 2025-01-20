@@ -1,51 +1,68 @@
-import { defu } from 'defu'
-import createResolver from 'postcss-import-resolver'
 import { defineUntypedSchema } from 'untyped'
+
+const ensureItemIsLast = (item: string) => (arr: string[]) => {
+  const index = arr.indexOf(item)
+  if (index !== -1) {
+    arr.splice(index, 1)
+    arr.push(item)
+  }
+  return arr
+}
+
+const orderPresets = {
+  cssnanoLast: ensureItemIsLast('cssnano'),
+  autoprefixerLast: ensureItemIsLast('autoprefixer'),
+  autoprefixerAndCssnanoLast (names: string[]) {
+    return orderPresets.cssnanoLast(orderPresets.autoprefixerLast(names))
+  },
+}
 
 export default defineUntypedSchema({
   postcss: {
     /**
+     * A strategy for ordering PostCSS plugins.
+     *
+     * @type {'cssnanoLast' | 'autoprefixerLast' | 'autoprefixerAndCssnanoLast' | string[] | ((names: string[]) => string[])}
+     */
+    order: {
+      $resolve: (val: string | string[] | ((plugins: string[]) => string[])): string[] | ((plugins: string[]) => string[]) => {
+        if (typeof val === 'string') {
+          if (!(val in orderPresets)) {
+            throw new Error(`[nuxt] Unknown PostCSS order preset: ${val}`)
+          }
+          return orderPresets[val as keyof typeof orderPresets]
+        }
+        return val ?? orderPresets.autoprefixerAndCssnanoLast
+      },
+    },
+    /**
      * Options for configuring PostCSS plugins.
      *
-     * https://postcss.org/
-     * @type {Record<string, any>}
+     * @see [PostCSS docs](https://postcss.org/)
+     * @type {Record<string, unknown> & { autoprefixer?: typeof import('autoprefixer').Options; cssnano?: typeof import('cssnano').Options }}
      */
     plugins: {
       /**
-       * https://github.com/postcss/postcss-import
-       */
-      'postcss-import': {
-        $resolve: async (val, get) => val !== false ? defu(val || {}, {
-          resolve: createResolver({
-            alias: { ...(await get('alias')) },
-            modules: [
-              await get('srcDir'),
-              await get('rootDir'),
-              ...(await get('modulesDir'))
-            ]
-          })
-        }) : val,
-      },
-
-      /**
-       * https://github.com/postcss/postcss-url
-       */
-      'postcss-url': {},
-
-      /**
-       * https://github.com/postcss/autoprefixer
+       * Plugin to parse CSS and add vendor prefixes to CSS rules.
+       *
+       * @see [`autoprefixer`](https://github.com/postcss/autoprefixer)
        */
       autoprefixer: {},
 
+      /**
+       * @see [`cssnano` configuration options](https://cssnano.github.io/cssnano/docs/config-file/#configuration-options)
+       */
       cssnano: {
-        $resolve: async (val, get) => val ?? !(await get('dev') && {
-          preset: ['default', {
-            // Keep quotes in font values to prevent from HEX conversion
-            // https://github.com/nuxt/nuxt/issues/6306
-            minifyFontValues: { removeQuotes: false }
-          }]
-        })
-      }
-    }
-  }
+        $resolve: async (val, get) => {
+          if (val || val === false) {
+            return val
+          }
+          if (await get('dev')) {
+            return false
+          }
+          return {}
+        },
+      },
+    },
+  },
 })

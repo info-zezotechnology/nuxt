@@ -5,14 +5,18 @@
     "build": "nuxi build"
   },
   "dependencies": {
+    "@nuxt/rspack-builder": "workspace:*",
     "@nuxt/webpack-builder": "workspace:*",
     "nuxt": "workspace:*"
   },
   "devDependencies": {
-    "ofetch": "latest",
+    "@vue/devtools-api": "latest",
+    "defu": "latest",
     "ufo": "latest",
     "unplugin": "latest",
-    "vitest": "latest",
-    "vue-router": "latest"
+    "vue": "latest"
+  },
+  "engines": {
+    "node": "^18.20.5 || ^20.9.0 || >=22.0.0"
   }
 }

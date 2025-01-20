@@ -8,10 +8,12 @@
 </template>
 
 <script setup>
-console.log('Running Child Setup')
+if (import.meta.client) {
+  console.log('Running Child Setup')
+}
 const route = useRoute()
 
 definePageMeta({
-  key: 'keyed'
+  key: 'keyed',
 })
 </script>

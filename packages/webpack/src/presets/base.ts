@@ -1,9 +1,7 @@
 import { normalize, resolve } from 'pathe'
 // @ts-expect-error missing types
 import TimeFixPlugin from 'time-fix-plugin'
-import WebpackBar from 'webpackbar'
 import type { Configuration } from 'webpack'
-import webpack from 'webpack'
 import { logger } from '@nuxt/kit'
 // @ts-expect-error missing types
 import FriendlyErrorsWebpackPlugin from '@nuxt/friendly-errors-webpack-plugin'
@@ -11,81 +9,86 @@ import escapeRegExp from 'escape-string-regexp'
 import { joinURL } from 'ufo'
 import type { NuxtOptions } from '@nuxt/schema'
 import { isTest } from 'std-env'
+import { defu } from 'defu'
 import type { WarningFilter } from '../plugins/warning-ignore'
 import WarningIgnorePlugin from '../plugins/warning-ignore'
 import type { WebpackConfigContext } from '../utils/config'
 import { applyPresets, fileName } from '../utils/config'
 
-export function base (ctx: WebpackConfigContext) {
-  applyPresets(ctx, [
+import { WebpackBarPlugin, builder, webpack } from '#builder'
+
+export async function base (ctx: WebpackConfigContext) {
+  await applyPresets(ctx, [
     baseAlias,
     baseConfig,
     basePlugins,
     baseResolve,
-    baseTranspile
+    baseTranspile,
   ])
 }
 
 function baseConfig (ctx: WebpackConfigContext) {
-  const { options } = ctx
-
-  ctx.config = {
+  ctx.config = defu({}, {
     name: ctx.name,
-    entry: { app: [resolve(options.appDir, options.experimental.asyncEntry ? 'entry.async' : 'entry')] },
+    entry: { app: [resolve(ctx.options.appDir, ctx.options.experimental.asyncEntry ? 'entry.async' : 'entry')] },
     module: { rules: [] },
     plugins: [],
     externals: [],
     optimization: {
-      ...options.webpack.optimization,
-      minimizer: []
+      ...ctx.userConfig.optimization,
+      minimizer: [],
     },
-    experiments: {},
+    experiments: {
+      ...ctx.userConfig.experiments,
+    },
     mode: ctx.isDev ? 'development' : 'production',
     cache: getCache(ctx),
     output: getOutput(ctx),
     stats: statsMap[ctx.nuxt.options.logLevel] ?? statsMap.info,
-    ...ctx.config
-  }
+    ...ctx.config,
+  } satisfies Configuration)
 }
 
 function basePlugins (ctx: WebpackConfigContext) {
-  const { config, options, nuxt } = ctx
-
-  config.plugins = config.plugins || []
+  ctx.config.plugins ||= []
 
   // Add timefix-plugin before other plugins
-  if (options.dev) {
-    config.plugins.push(new TimeFixPlugin())
+  if (ctx.options.dev) {
+    if (ctx.nuxt.options.builder !== '@nuxt/rspack-builder') {
+      ctx.config.plugins.push(new TimeFixPlugin())
+    }
   }
 
   // User plugins
-  config.plugins.push(...(options.webpack.plugins || []))
+  ctx.config.plugins.push(...(ctx.userConfig.plugins || []))
 
   // Ignore empty warnings
-  config.plugins.push(new WarningIgnorePlugin(getWarningIgnoreFilter(ctx)))
+  if (ctx.nuxt.options.builder !== '@nuxt/rspack-builder') {
+    ctx.config.plugins.push(new WarningIgnorePlugin(getWarningIgnoreFilter(ctx)))
+  }
 
   // Provide env via DefinePlugin
-  config.plugins.push(new webpack.DefinePlugin(getEnv(ctx)))
+  ctx.config.plugins.push(new webpack.DefinePlugin(getEnv(ctx)))
 
   // Friendly errors
-  if (ctx.isServer || (ctx.isDev && options.webpack.friendlyErrors)) {
-    config.plugins.push(
+  if (ctx.isServer || (ctx.isDev && ctx.userConfig.friendlyErrors)) {
+    ctx.config.plugins.push(
       new FriendlyErrorsWebpackPlugin({
         clearConsole: false,
         reporter: 'consola',
-        logLevel: 'ERROR' // TODO
-      })
+        logLevel: 'ERROR', // TODO
+      }),
     )
   }
 
-  if (nuxt.options.webpack.profile) {
+  if (ctx.nuxt.options.webpack.profile) {
     // Webpackbar
     const colors = {
       client: 'green',
       server: 'orange',
-      modern: 'blue'
+      modern: 'blue',
     }
-    config.plugins.push(new WebpackBar({
+    ctx.config.plugins.push(new WebpackBarPlugin({
       name: ctx.name,
       color: colors[ctx.name as keyof typeof colors],
       reporters: ['stats'],
@@ -95,75 +98,67 @@ function basePlugins (ctx: WebpackConfigContext) {
         reporter: {
           change: (_, { shortPath }) => {
             if (!ctx.isServer) {
-              nuxt.callHook('webpack:change', shortPath)
+              ctx.nuxt.callHook(`${builder}:change`, shortPath)
             }
           },
-          done: ({ state }) => {
-            if (state.hasErrors) {
-              nuxt.callHook('webpack:error')
+          done: (_, { stats }) => {
+            if (stats.hasErrors()) {
+              ctx.nuxt.callHook(`${builder}:error`)
             } else {
-              logger.success(`${state.name} ${state.message}`)
+              logger.success(`Finished building ${stats.compilation.name ?? 'Nuxt app'}`)
             }
           },
           allDone: () => {
-            nuxt.callHook('webpack:done')
+            ctx.nuxt.callHook(`${builder}:done`)
           },
-          progress ({ statesArray }) {
-            nuxt.callHook('webpack:progress', statesArray)
-          }
-        }
-      }
+          progress: ({ webpackbar }) => {
+            ctx.nuxt.callHook(`${builder}:progress`, webpackbar.statesArray)
+          },
+        },
+      },
     }))
   }
 }
 
 function baseAlias (ctx: WebpackConfigContext) {
-  const { options } = ctx
-
   ctx.alias = {
-    '#app': options.appDir,
-    '#build/plugins': resolve(options.buildDir, 'plugins', ctx.isClient ? 'client' : 'server'),
-    '#build': options.buildDir,
-    ...options.alias,
-    ...ctx.alias
+    '#app': ctx.options.appDir,
+    ...ctx.options.alias,
+    ...ctx.alias,
   }
   if (ctx.isClient) {
-    ctx.alias['#internal/nitro'] = resolve(ctx.nuxt.options.buildDir, 'nitro.client.mjs')
+    ctx.alias['nitro/runtime'] = resolve(ctx.nuxt.options.buildDir, 'nitro.client.mjs')
   }
 }
 
 function baseResolve (ctx: WebpackConfigContext) {
-  const { options, config } = ctx
-
   // Prioritize nested node_modules in webpack search path (#2558)
   // TODO: this might be refactored as default modulesDir?
-  const webpackModulesDir = ['node_modules'].concat(options.modulesDir)
+  const webpackModulesDir = ['node_modules'].concat(ctx.options.modulesDir)
 
-  config.resolve = {
+  ctx.config.resolve = {
     extensions: ['.wasm', '.mjs', '.js', '.ts', '.json', '.vue', '.jsx', '.tsx'],
     alias: ctx.alias,
     modules: webpackModulesDir,
     fullySpecified: false,
-    ...config.resolve
+    ...ctx.config.resolve,
   }
 
-  config.resolveLoader = {
+  ctx.config.resolveLoader = {
     modules: webpackModulesDir,
-    ...config.resolveLoader
+    ...ctx.config.resolveLoader,
   }
 }
 
-export function baseTranspile (ctx: WebpackConfigContext) {
-  const { options } = ctx
-
+function baseTranspile (ctx: WebpackConfigContext) {
   const transpile = [
     /\.vue\.js/i, // include SFCs in node_modules
     /consola\/src/,
     /vue-demi/,
-    /(^|\/)nuxt\/(dist\/)?(app|[^/]+\/runtime)($|\/)/
+    /(^|\/)nuxt\/(src\/|dist\/)?(app|[^/]+\/runtime)($|\/)/,
   ]
 
-  for (let pattern of options.build.transpile) {
+  for (let pattern of ctx.options.build.transpile) {
     if (typeof pattern === 'function') {
       const result = pattern(ctx)
       if (result) { pattern = result }
@@ -179,10 +174,8 @@ export function baseTranspile (ctx: WebpackConfigContext) {
   ctx.transpile = [...transpile, ...ctx.transpile]
 }
 
-function getCache (ctx: WebpackConfigContext): webpack.Configuration['cache'] {
-  const { options } = ctx
-
-  if (!options.dev) {
+function getCache (ctx: WebpackConfigContext): Configuration['cache'] {
+  if (!ctx.options.dev) {
     return false
   }
 
@@ -202,47 +195,46 @@ function getCache (ctx: WebpackConfigContext): webpack.Configuration['cache'] {
   // }
 }
 
-function getOutput (ctx: WebpackConfigContext): webpack.Configuration['output'] {
-  const { options } = ctx
-
+function getOutput (ctx: WebpackConfigContext): Configuration['output'] {
   return {
-    path: resolve(options.buildDir, 'dist', ctx.isServer ? 'server' : joinURL('client', options.app.buildAssetsDir)),
+    path: resolve(ctx.options.buildDir, 'dist', ctx.isServer ? 'server' : joinURL('client', ctx.options.app.buildAssetsDir)),
     filename: fileName(ctx, 'app'),
     chunkFilename: fileName(ctx, 'chunk'),
-    publicPath: joinURL(options.app.baseURL, options.app.buildAssetsDir)
+    publicPath: joinURL(ctx.options.app.baseURL, ctx.options.app.buildAssetsDir),
   }
 }
 
 function getWarningIgnoreFilter (ctx: WebpackConfigContext): WarningFilter {
-  const { options } = ctx
-
   const filters: WarningFilter[] = [
     // Hide warnings about plugins without a default export (#1179)
     warn => warn.name === 'ModuleDependencyWarning' &&
       warn.message.includes('export \'default\'') &&
       warn.message.includes('nuxt_plugin_'),
-    ...(options.webpack.warningIgnoreFilters || [])
+    ...(ctx.userConfig.warningIgnoreFilters || []),
   ]
 
   return warn => !filters.some(ignoreFilter => ignoreFilter(warn))
 }
 
 function getEnv (ctx: WebpackConfigContext) {
-  const { options } = ctx
-
   const _env: Record<string, string | boolean> = {
     'process.env.NODE_ENV': JSON.stringify(ctx.config.mode),
-    'process.mode': JSON.stringify(ctx.config.mode),
-    'process.dev': options.dev,
-    'process.test': isTest,
-    __NUXT_VERSION__: JSON.stringify(ctx.nuxt._version),
+    '__NUXT_VERSION__': JSON.stringify(ctx.nuxt._version),
+    '__NUXT_ASYNC_CONTEXT__': ctx.options.experimental.asyncContext,
     'process.env.VUE_ENV': JSON.stringify(ctx.name),
+    'process.dev': ctx.options.dev,
+    'process.test': isTest,
     'process.browser': ctx.isClient,
     'process.client': ctx.isClient,
-    'process.server': ctx.isServer
+    'process.server': ctx.isServer,
+    'import.meta.dev': ctx.options.dev,
+    'import.meta.test': isTest,
+    'import.meta.browser': ctx.isClient,
+    'import.meta.client': ctx.isClient,
+    'import.meta.server': ctx.isServer,
   }
 
-  if (options.webpack.aggressiveCodeRemoval) {
+  if (ctx.userConfig.aggressiveCodeRemoval) {
     _env['typeof process'] = JSON.stringify(ctx.isServer ? 'object' : 'undefined')
     _env['typeof window'] = _env['typeof document'] = JSON.stringify(!ctx.isServer ? 'object' : 'undefined')
   }
@@ -253,5 +245,5 @@ function getEnv (ctx: WebpackConfigContext) {
 const statsMap: Record<NuxtOptions['logLevel'], Configuration['stats']> = {
   silent: 'none',
   info: 'normal',
-  verbose: 'verbose'
+  verbose: 'verbose',
 }

@@ -1,13 +1,16 @@
-import { Suspense, Transition, computed, defineComponent, h, nextTick, onMounted, provide, reactive } from 'vue'
+import { Fragment, Suspense, Transition, defineComponent, h, inject, nextTick, ref, watch } from 'vue'
 import type { KeepAliveProps, TransitionProps, VNode } from 'vue'
-import { RouterView } from '#vue-router'
+import { RouterView } from 'vue-router'
 import { defu } from 'defu'
-import type { RouteLocation, RouteLocationNormalized, RouteLocationNormalizedLoaded } from '#vue-router'
+import type { RouteLocationNormalized, RouteLocationNormalizedLoaded } from 'vue-router'
 
+import { generateRouteKey, toArray, wrapInKeepAlive } from './utils'
 import type { RouterViewSlotProps } from './utils'
-import { generateRouteKey, wrapInKeepAlive } from './utils'
+import { RouteProvider } from '#app/components/route-provider'
 import { useNuxtApp } from '#app/nuxt'
+import { useRouter } from '#app/composables/router'
 import { _wrapIf } from '#app/components/utils'
+import { LayoutMetaSymbol, PageRouteSymbol } from '#app/components/injections'
 // @ts-expect-error virtual file
 import { appKeepalive as defaultKeepaliveConfig, appPageTransition as defaultPageTransition } from '#build/nuxt.config.mjs'
 
@@ -16,106 +19,160 @@ export default defineComponent({
   inheritAttrs: false,
   props: {
     name: {
-      type: String
+      type: String,
     },
     transition: {
       type: [Boolean, Object] as any as () => boolean | TransitionProps,
-      default: undefined
+      default: undefined,
     },
     keepalive: {
       type: [Boolean, Object] as any as () => boolean | KeepAliveProps,
-      default: undefined
+      default: undefined,
     },
     route: {
-      type: Object as () => RouteLocationNormalized
+      type: Object as () => RouteLocationNormalized,
     },
     pageKey: {
       type: [Function, String] as unknown as () => string | ((route: RouteLocationNormalizedLoaded) => string),
-      default: null
-    }
+      default: null,
+    },
   },
-  setup (props, { attrs }) {
+  setup (props, { attrs, slots, expose }) {
     const nuxtApp = useNuxtApp()
+    const pageRef = ref()
+    const forkRoute = inject(PageRouteSymbol, null)
+    let previousPageKey: string | undefined | false
+
+    expose({ pageRef })
+
+    const _layoutMeta = inject(LayoutMetaSymbol, null)
+    let vnode: VNode
+
+    const done = nuxtApp.deferHydration()
+    if (import.meta.client && nuxtApp.isHydrating) {
+      const removeErrorHook = nuxtApp.hooks.hookOnce('app:error', done)
+      useRouter().beforeEach(removeErrorHook)
+    }
+
+    if (props.pageKey) {
+      watch(() => props.pageKey, (next, prev) => {
+        if (next !== prev) {
+          nuxtApp.callHook('page:loading:start')
+        }
+      })
+    }
+
+    if (import.meta.dev) {
+      nuxtApp._isNuxtPageUsed = true
+    }
+    let pageLoadingEndHookAlreadyCalled = false
     return () => {
       return h(RouterView, { name: props.name, route: props.route, ...attrs }, {
         default: (routeProps: RouterViewSlotProps) => {
-          if (!routeProps.Component) { return }
+          const isRenderingNewRouteInOldFork = import.meta.client && haveParentRoutesRendered(forkRoute, routeProps.route, routeProps.Component)
+          const hasSameChildren = import.meta.client && forkRoute && forkRoute.matched.length === routeProps.route.matched.length
+
+          if (!routeProps.Component) {
+            // If we're rendering a `<NuxtPage>` child route on navigation to a route which lacks a child page
+            // we'll render the old vnode until the new route finishes resolving
+            if (import.meta.client && vnode && !hasSameChildren) {
+              return vnode
+            }
+            done()
+            return
+          }
+
+          // Return old vnode if we are rendering _new_ page suspense fork in _old_ layout suspense fork
+          if (import.meta.client && vnode && _layoutMeta && !_layoutMeta.isCurrent(routeProps.route)) {
+            return vnode
+          }
+
+          if (import.meta.client && isRenderingNewRouteInOldFork && forkRoute && (!_layoutMeta || _layoutMeta?.isCurrent(forkRoute))) {
+            // if leaving a route with an existing child route, render the old vnode
+            if (hasSameChildren) {
+              return vnode
+            }
+            // If _leaving_ null child route, return null vnode
+            return null
+          }
 
           const key = generateRouteKey(routeProps, props.pageKey)
-          const done = nuxtApp.deferHydration()
+          if (!nuxtApp.isHydrating && !hasChildrenRoutes(forkRoute, routeProps.route, routeProps.Component) && previousPageKey === key) {
+            nuxtApp.callHook('page:loading:end')
+            pageLoadingEndHookAlreadyCalled = true
+          }
+          previousPageKey = key
 
           const hasTransition = !!(props.transition ?? routeProps.route.meta.pageTransition ?? defaultPageTransition)
           const transitionProps = hasTransition && _mergeTransitionProps([
             props.transition,
             routeProps.route.meta.pageTransition,
             defaultPageTransition,
-            { onAfterLeave: () => { nuxtApp.callHook('page:transition:finish', routeProps.Component) } }
+            { onAfterLeave: () => { nuxtApp.callHook('page:transition:finish', routeProps.Component) } },
           ].filter(Boolean))
 
-          return _wrapIf(Transition, hasTransition && transitionProps,
-            wrapInKeepAlive(props.keepalive ?? routeProps.route.meta.keepalive ?? (defaultKeepaliveConfig as KeepAliveProps), h(Suspense, {
+          const keepaliveConfig = props.keepalive ?? routeProps.route.meta.keepalive ?? (defaultKeepaliveConfig as KeepAliveProps)
+          vnode = _wrapIf(Transition, hasTransition && transitionProps,
+            wrapInKeepAlive(keepaliveConfig, h(Suspense, {
               suspensible: true,
               onPending: () => nuxtApp.callHook('page:start', routeProps.Component),
-              onResolve: () => { nextTick(() => nuxtApp.callHook('page:finish', routeProps.Component).finally(done)) }
-            }, { default: () => h(RouteProvider, { key, routeProps, pageKey: key, hasTransition } as {}) })
+              onResolve: () => {
+                nextTick(() => nuxtApp.callHook('page:finish', routeProps.Component).then(() => {
+                  if (!pageLoadingEndHookAlreadyCalled) {
+                    return nuxtApp.callHook('page:loading:end')
+                  }
+                  pageLoadingEndHookAlreadyCalled = false
+                }).finally(done))
+              },
+            }, {
+              default: () => {
+                const providerVNode = h(RouteProvider, {
+                  key: key || undefined,
+                  vnode: slots.default ? h(Fragment, undefined, slots.default(routeProps)) : routeProps.Component,
+                  route: routeProps.route,
+                  renderKey: key || undefined,
+                  trackRootNodes: hasTransition,
+                  vnodeRef: pageRef,
+                })
+                if (import.meta.client && keepaliveConfig) {
+                  (providerVNode.type as any).name = (routeProps.Component.type as any).name || (routeProps.Component.type as any).__name || 'RouteProvider'
+                }
+                return providerVNode
+              },
+            }),
             )).default()
-        }
+
+          return vnode
+        },
       })
     }
-  }
+  },
 })
-
-function _toArray (val: any) {
-  return Array.isArray(val) ? val : (val ? [val] : [])
-}
 
 function _mergeTransitionProps (routeProps: TransitionProps[]): TransitionProps {
   const _props: TransitionProps[] = routeProps.map(prop => ({
     ...prop,
-    onAfterLeave: _toArray(prop.onAfterLeave)
+    onAfterLeave: prop.onAfterLeave ? toArray(prop.onAfterLeave) : undefined,
   }))
   return defu(..._props as [TransitionProps, TransitionProps])
 }
 
-const RouteProvider = defineComponent({
-  name: 'RouteProvider',
-  // TODO: Type props
-  // eslint-disable-next-line vue/require-prop-types
-  props: ['routeProps', 'pageKey', 'hasTransition'],
-  setup (props) {
-    // Prevent reactivity when the page will be rerendered in a different suspense fork
-    // eslint-disable-next-line vue/no-setup-props-destructure
-    const previousKey = props.pageKey
-    // eslint-disable-next-line vue/no-setup-props-destructure
-    const previousRoute = props.routeProps.route
+function haveParentRoutesRendered (fork: RouteLocationNormalizedLoaded | null, newRoute: RouteLocationNormalizedLoaded, Component?: VNode) {
+  if (!fork) { return false }
 
-    // Provide a reactive route within the page
-    const route = {} as RouteLocation
-    for (const key in props.routeProps.route) {
-      (route as any)[key] = computed(() => previousKey === props.pageKey ? props.routeProps.route[key] : previousRoute[key])
-    }
+  const index = newRoute.matched.findIndex(m => m.components?.default === Component?.type)
+  if (!index || index === -1) { return false }
 
-    provide('_route', reactive(route))
+  // we only care whether the parent route components have had to rerender
+  return newRoute.matched.slice(0, index)
+    .some(
+      (c, i) => c.components?.default !== fork.matched[i]?.components?.default) ||
+    (Component && generateRouteKey({ route: newRoute, Component }) !== generateRouteKey({ route: fork, Component }))
+}
 
-    let vnode: VNode
-    if (process.dev && process.client && props.hasTransition) {
-      onMounted(() => {
-        nextTick(() => {
-          if (['#comment', '#text'].includes(vnode?.el?.nodeName)) {
-            const filename = (vnode?.type as any).__file
-            console.warn(`[nuxt] \`${filename}\` does not have a single root node and will cause errors when navigating between routes.`)
-          }
-        })
-      })
-    }
+function hasChildrenRoutes (fork: RouteLocationNormalizedLoaded | null, newRoute: RouteLocationNormalizedLoaded, Component?: VNode) {
+  if (!fork) { return false }
 
-    return () => {
-      if (process.dev && process.client) {
-        vnode = h(props.routeProps.Component)
-        return vnode
-      }
-
-      return h(props.routeProps.Component)
-    }
-  }
-})
+  const index = newRoute.matched.findIndex(m => m.components?.default === Component?.type)
+  return index < newRoute.matched.length - 1
+}

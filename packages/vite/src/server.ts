@@ -2,22 +2,24 @@ import { resolve } from 'pathe'
 import * as vite from 'vite'
 import vuePlugin from '@vitejs/plugin-vue'
 import viteJsxPlugin from '@vitejs/plugin-vue-jsx'
-import { logger, resolveModule, resolvePath } from '@nuxt/kit'
+import { logger, resolvePath, tryImportModule } from '@nuxt/kit'
 import { joinURL, withTrailingSlash, withoutLeadingSlash } from 'ufo'
 import type { ViteConfig } from '@nuxt/schema'
+import defu from 'defu'
+import type { Nitro } from 'nitro/types'
+import escapeStringRegexp from 'escape-string-regexp'
 import type { ViteBuildContext } from './vite'
 import { createViteLogger } from './utils/logger'
 import { initViteNodeServer } from './vite-node'
-import { ssrStylesPlugin } from './plugins/ssr-styles'
-import { pureAnnotationsPlugin } from './plugins/pure-annotations'
 import { writeManifest } from './manifest'
 import { transpile } from './utils/transpile'
+import { createSourcemapPreserver } from './plugins/nitro-sourcemap'
 
 export async function buildServer (ctx: ViteBuildContext) {
-  const _resolve = (id: string) => resolveModule(id, { paths: ctx.nuxt.options.modulesDir })
   const helper = ctx.nuxt.options.nitro.imports !== false ? '' : 'globalThis.'
   const entry = ctx.nuxt.options.ssr ? ctx.entry : await resolvePath(resolve(ctx.nuxt.options.appDir, 'entry-spa'))
-  const serverConfig: ViteConfig = vite.mergeConfig(ctx.config, {
+  const serverConfig: ViteConfig = vite.mergeConfig(ctx.config, vite.mergeConfig({
+    configFile: false,
     base: ctx.nuxt.options.dev
       ? joinURL(ctx.nuxt.options.app.baseURL.replace(/^\.\//, '/') || '/', ctx.nuxt.options.app.buildAssetsDir)
       : undefined,
@@ -34,118 +36,134 @@ export async function buildServer (ctx: ViteBuildContext) {
           const relativeFilename = filename.replace(withTrailingSlash(withoutLeadingSlash(ctx.nuxt.options.app.buildAssetsDir)), '')
           return { runtime: `${helper}__buildAssetsURL(${JSON.stringify(relativeFilename)})` }
         }
-      }
+      },
     },
     css: {
-      devSourcemap: ctx.nuxt.options.sourcemap.server
+      devSourcemap: !!ctx.nuxt.options.sourcemap.server,
     },
     define: {
       'process.server': true,
       'process.client': false,
-      'typeof window': '"undefined"',
-      'typeof document': '"undefined"',
-      'typeof navigator': '"undefined"',
-      'typeof location': '"undefined"',
-      'typeof XMLHttpRequest': '"undefined"'
+      'process.browser': false,
+      'import.meta.server': true,
+      'import.meta.client': false,
+      'import.meta.browser': false,
+      'window': 'undefined',
+      'document': 'undefined',
+      'navigator': 'undefined',
+      'location': 'undefined',
+      'XMLHttpRequest': 'undefined',
     },
     optimizeDeps: {
-      entries: ctx.nuxt.options.ssr ? [ctx.entry] : []
+      noDiscovery: true,
     },
     resolve: {
-      alias: {
-        '#build/plugins': resolve(ctx.nuxt.options.buildDir, 'plugins/server'),
-        ...ctx.nuxt.options.experimental.externalVue || ctx.nuxt.options.dev
-          ? {}
-          : {
-              '@vue/reactivity': _resolve(`@vue/reactivity/dist/reactivity.cjs${ctx.nuxt.options.dev ? '' : '.prod'}.js`),
-              '@vue/shared': _resolve(`@vue/shared/dist/shared.cjs${ctx.nuxt.options.dev ? '' : '.prod'}.js`),
-              'vue-router': _resolve(`vue-router/dist/vue-router.cjs${ctx.nuxt.options.dev ? '' : '.prod'}.js`),
-              'vue/server-renderer': _resolve('vue/server-renderer'),
-              'vue/compiler-sfc': _resolve('vue/compiler-sfc'),
-              vue: _resolve(`vue/dist/vue.cjs${ctx.nuxt.options.dev ? '' : '.prod'}.js`)
-            }
-      }
+      conditions: ((ctx.nuxt as any)._nitro as Nitro)?.options.exportConditions,
     },
     ssr: {
-      external: ctx.nuxt.options.experimental.externalVue
-        ? ['#internal/nitro', '#internal/nitro/utils', 'vue', 'vue-router']
-        : ['#internal/nitro', '#internal/nitro/utils'],
+      external: [
+        'nitro/runtime',
+      ],
       noExternal: [
         ...transpile({ isServer: true, isDev: ctx.nuxt.options.dev }),
-        // TODO: Use externality for production (rollup) build
-        /\/esm\/.*\.js$/,
-        /\.(es|esm|esm-browser|esm-bundler).js$/,
         '/__vue-jsx',
         '#app',
         /^nuxt(\/|$)/,
-        /(nuxt|nuxt3)\/(dist|src|app)/
-      ]
+        /(nuxt|nuxt3|nuxt-nightly)\/(dist|src|app)/,
+      ],
     },
-    cacheDir: resolve(ctx.nuxt.options.rootDir, 'node_modules/.cache/vite', 'server'),
+    cacheDir: resolve(ctx.nuxt.options.rootDir, ctx.config.cacheDir ?? 'node_modules/.cache/vite', 'server'),
     build: {
-      sourcemap: ctx.nuxt.options.sourcemap.server ? ctx.config.build?.sourcemap ?? true : false,
+      // we'll display this in nitro build output
+      reportCompressedSize: false,
+      sourcemap: ctx.nuxt.options.sourcemap.server ? ctx.config.build?.sourcemap ?? ctx.nuxt.options.sourcemap.server : false,
       outDir: resolve(ctx.nuxt.options.buildDir, 'dist/server'),
       ssr: true,
       rollupOptions: {
         input: { server: entry },
-        external: ['#internal/nitro', ...ctx.nuxt.options.experimental.externalVue ? ['vue', 'vue-router'] : []],
+        external: [
+          'nitro/runtime',
+          '#internal/nuxt/paths',
+          '#internal/nuxt/app-config',
+          '#app-manifest',
+          '#shared',
+          new RegExp('^' + escapeStringRegexp(withTrailingSlash(resolve(ctx.nuxt.options.rootDir, ctx.nuxt.options.dir.shared)))),
+        ],
         output: {
           entryFileNames: '[name].mjs',
           format: 'module',
           generatedCode: {
-            constBindings: true
-          }
+            symbols: true, // temporary fix for https://github.com/vuejs/core/issues/8351,
+            constBindings: true,
+          },
         },
         onwarn (warning, rollupWarn) {
           if (warning.code && ['UNUSED_EXTERNAL_IMPORT'].includes(warning.code)) {
             return
           }
           rollupWarn(warning)
-        }
-      }
+        },
+      },
     },
     server: {
+      warmup: {
+        ssrFiles: [ctx.entry],
+      },
       // https://github.com/vitest-dev/vitest/issues/229#issuecomment-1002685027
       preTransformRequests: false,
-      hmr: false
+      hmr: false,
     },
-    plugins: [
-      pureAnnotationsPlugin.vite({
-        sourcemap: ctx.nuxt.options.sourcemap.server,
-        functions: ['defineComponent', 'defineAsyncComponent', 'defineNuxtLink', 'createClientOnly', 'defineNuxtPlugin', 'defineNuxtRouteMiddleware', 'defineNuxtComponent', 'useRuntimeConfig']
-      })
-    ]
-  } satisfies vite.InlineConfig)
-
-  serverConfig.customLogger = createViteLogger(serverConfig)
+  } satisfies vite.InlineConfig, ctx.nuxt.options.vite.$server || {}))
 
   if (!ctx.nuxt.options.dev) {
-    const chunksWithInlinedCSS = new Set<string>()
-    serverConfig.plugins!.push(ssrStylesPlugin({
-      srcDir: ctx.nuxt.options.srcDir,
-      chunksWithInlinedCSS,
-      shouldInline: ctx.nuxt.options.experimental.inlineSSRStyles,
-      components: ctx.nuxt.apps.default.components
-    }))
+    const { runtimeDependencies = [] } = await tryImportModule<typeof import('nitro/runtime/meta')>('nitro/runtime/meta', {
+      paths: ctx.nuxt.options.modulesDir,
+    }) || {}
+    if (Array.isArray(serverConfig.ssr!.external)) {
+      serverConfig.ssr!.external.push(
+        // explicit dependencies we use in our ssr renderer - these can be inlined (if necessary) in the nitro build
+        'unhead', '@unhead/ssr', 'unctx', 'h3', 'devalue', '@nuxt/devalue', 'radix3', 'rou3', 'unstorage', 'hookable',
+        // ensure we only have one version of vue if nitro is going to inline anyway
+        ...((ctx.nuxt as any)._nitro as Nitro).options.inlineDynamicImports ? ['vue', '@vue/server-renderer', '@unhead/vue'] : [],
+        // dependencies we might share with nitro - these can be inlined (if necessary) in the nitro build
+        ...runtimeDependencies,
+      )
+    }
+  }
 
-    // Remove CSS entries for files that will have inlined styles
-    ctx.nuxt.hook('build:manifest', (manifest) => {
-      for (const key in manifest) {
-        const entry = manifest[key]
-        const shouldRemoveCSS = chunksWithInlinedCSS.has(key)
-        if (shouldRemoveCSS) {
-          entry.css = []
-        }
-      }
+  // tell rollup's nitro build about the original sources of the generated vite server build
+  if (ctx.nuxt.options.sourcemap.server && !ctx.nuxt.options.dev) {
+    const { vitePlugin, nitroPlugin } = createSourcemapPreserver()
+    serverConfig.plugins!.push(vitePlugin)
+    ctx.nuxt.hook('nitro:build:before', (nitro) => {
+      nitro.options.rollupConfig = defu(nitro.options.rollupConfig, {
+        plugins: [nitroPlugin],
+      })
     })
   }
+
+  serverConfig.customLogger = createViteLogger(serverConfig)
 
   await ctx.nuxt.callHook('vite:extendConfig', serverConfig, { isClient: false, isServer: true })
 
   serverConfig.plugins!.unshift(
     vuePlugin(serverConfig.vue),
-    viteJsxPlugin(serverConfig.vueJsx)
+    viteJsxPlugin(serverConfig.vueJsx),
   )
+
+  if (!ctx.nuxt.options.dev) {
+    serverConfig.plugins!.push({
+      name: 'nuxt:nitro:vue-feature-flags',
+      configResolved (config) {
+        for (const key in config.define) {
+          if (key.startsWith('__VUE')) {
+            // tree-shake vue feature flags for non-node targets
+            ((ctx.nuxt as any)._nitro as Nitro).options.replace[key] = config.define[key]
+          }
+        }
+      },
+    })
+  }
 
   await ctx.nuxt.callHook('vite:configResolved', serverConfig, { isClient: false, isServer: true })
 
@@ -165,10 +183,8 @@ export async function buildServer (ctx: ViteBuildContext) {
     return
   }
 
-  // Write dev client manifest
-  await writeManifest(ctx)
-
   if (!ctx.nuxt.options.ssr) {
+    await writeManifest(ctx)
     await onBuild()
     return
   }
@@ -177,18 +193,13 @@ export async function buildServer (ctx: ViteBuildContext) {
   const viteServer = await vite.createServer(serverConfig)
   ctx.ssrServer = viteServer
 
-  await ctx.nuxt.callHook('vite:serverCreated', viteServer, { isClient: false, isServer: true })
-
   // Close server on exit
   ctx.nuxt.hook('close', () => viteServer.close())
+
+  await ctx.nuxt.callHook('vite:serverCreated', viteServer, { isClient: false, isServer: true })
 
   // Initialize plugins
   await viteServer.pluginContainer.buildStart({})
 
-  if (ctx.config.devBundler !== 'legacy') {
-    await initViteNodeServer(ctx)
-  } else {
-    logger.info('Vite server using legacy server bundler...')
-    await import('./dev-bundler').then(r => r.initViteDevBundler(ctx, onBuild))
-  }
+  await initViteNodeServer(ctx)
 }

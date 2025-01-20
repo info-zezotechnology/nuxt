@@ -1,7 +1,7 @@
 <script setup>
 definePageMeta({
   layout: 'override',
-  middleware: 'override'
+  middleware: 'override',
 })
 </script>
 
@@ -10,5 +10,6 @@ definePageMeta({
     <div>Extended page from bar</div>
     <div>Middleware | override: {{ $route.meta.override }}</div>
     <ExtendsOverride />
+    <NuxtPage />
   </div>
 </template>

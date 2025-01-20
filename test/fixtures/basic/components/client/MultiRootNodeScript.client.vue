@@ -1,8 +1,14 @@
 <template>
-  <div v-bind="$attrs" class="multi-root-node-script-count">
+  <div
+    v-bind="$attrs"
+    class="multi-root-node-script-count"
+  >
     {{ count }}
   </div>
-  <button class="multi-root-node-script-button" @click="add">
+  <button
+    class="multi-root-node-script-button"
+    @click="add"
+  >
     add 1 to count
   </button>
 </template>
@@ -14,6 +20,6 @@ export default defineNuxtComponent({
 
     const add = () => count.value++
     return { count, add }
-  }
+  },
 })
 </script>

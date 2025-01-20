@@ -7,9 +7,11 @@ definePageMeta({
   middleware: async () => {
     await new Promise(resolve => setTimeout(resolve, 1))
     return navigateTo({ path: '/' }, { redirectCode: 307 })
-  }
+  },
 })
-console.log('running setup')
+if (import.meta.client) {
+  console.log('running setup')
+}
 useNuxtApp().hook('app:rendered', () => {
   throw new Error('this should not run')
 })

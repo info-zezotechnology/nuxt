@@ -1,6 +1,6 @@
 import { normalizeModuleTranspilePath, useNuxt } from '@nuxt/kit'
 
-export interface AddModuleTranspilesOptions {
+interface AddModuleTranspilesOptions {
   additionalModules?: string[]
 }
 
@@ -10,7 +10,7 @@ export const addModuleTranspiles = (opts: AddModuleTranspilesOptions = {}) => {
   const modules = [
     ...opts.additionalModules || [],
     ...nuxt.options.modules,
-    ...nuxt.options._modules
+    ...nuxt.options._modules,
   ]
     .map(m => typeof m === 'string' ? m : Array.isArray(m) ? m[0] : m.src)
     .filter(m => typeof m === 'string')

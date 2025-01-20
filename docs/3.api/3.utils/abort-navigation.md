@@ -1,12 +1,14 @@
 ---
-title: "abortNavigation"
+title: 'abortNavigation'
+description: 'abortNavigation is a helper function that prevents navigation from taking place and throws an error if one is set as a parameter.'
+links:
+  - label: Source
+    icon: i-simple-icons-github
+    to: https://github.com/nuxt/nuxt/blob/main/packages/nuxt/src/app/composables/router.ts
+    size: xs
 ---
 
-# `abortNavigation`
-
-`abortNavigation` is a helper function that prevents navigation from taking place and throws an error if one is set as a parameter.
-
-::alert{type="warning"}
+::warning
 `abortNavigation` is only usable inside a [route middleware handler](/docs/guide/directory-structure/middleware).
 ::
 
@@ -22,7 +24,7 @@ abortNavigation(err?: Error | string): false
 
 - **Type**: [`Error`](https://developer.mozilla.org/pl/docs/Web/JavaScript/Reference/Global_Objects/Error) | `string`
 
-  Optional error to be thrown by `abortNavigation`.
+  Optional error to be thrown by `abortNavigation`.
 
 ## Examples
 
@@ -35,7 +37,7 @@ export default defineNuxtRouteMiddleware((to, from) => {
   if (!user.value.isAuthorized) {
     return abortNavigation()
   }
- 
+
   if (to.path !== '/edit-post') {
     return navigateTo('/edit-post')
   }
@@ -48,7 +50,7 @@ You can pass the error as a string:
 
 ```ts [middleware/auth.ts]
 export default defineNuxtRouteMiddleware((to, from) => {
-  const auth = useState('auth')
+  const user = useState('user')
 
   if (!user.value.isAuthorized) {
     return abortNavigation('Insufficient permissions.')

@@ -23,11 +23,43 @@
     <NuxtLink to="/">
       Link
     </NuxtLink>
-    <NuxtLink id="islands" to="/islands">
+    <NuxtLink
+      id="islands"
+      to="/islands"
+    >
       islands
     </NuxtLink>
-    <NuxtLink to="/chunk-error" :prefetch="false">
+    <NuxtLink
+      id="to-immediate-remove-unmounted"
+      to="/useAsyncData/immediate-remove-unmounted"
+    >
+      Immediate remove unmounted
+    </NuxtLink>
+    <NuxtLink
+      no-prefetch
+      to="/chunk-error"
+    >
       Chunk error
+    </NuxtLink>
+    <NuxtLink
+      id="to-client-only-components"
+      to="/client-only-components"
+    >
+      createClientOnly()
+    </NuxtLink>
+    <NuxtLink
+      id="middleware-abort-non-fatal"
+      to="/middleware-abort-non-fatal"
+      :prefetch="false"
+    >
+      Middleware abort navigation
+    </NuxtLink>
+    <NuxtLink
+      id="middleware-abort-non-fatal-error"
+      to="/middleware-abort-non-fatal?error=someerror"
+      :prefetch="false"
+    >
+      Middleware abort navigation with error
     </NuxtLink>
     Some value: {{ someValue }}
     <button @click="someValue++">
@@ -36,42 +68,91 @@
     <NuxtLink to="/no-scripts">
       to no script
     </NuxtLink>
-    <NestedSugarCounter :multiplier="2" />
+    <NestedCounter :multiplier="2" />
     <CustomComponent />
+    <component :is="`global${'-'.toString()}sync`" />
     <Spin>Test</Spin>
     <component :is="`test${'-'.toString()}global`" />
     <component :is="`with${'-'.toString()}suffix`" />
-    <ClientWrapped ref="clientRef" style="color: red;" class="client-only" />
-    <ServerOnlyComponent class="server-only" style="background-color: gray;" />
+    <ClientWrapped
+      ref="clientRef"
+      style="color: red;"
+      class="client-only"
+    />
+    <NuxtIsland
+      ref="island"
+      name="AsyncServerComponent"
+      :props="{ count: 34 }"
+    />
+    <ServerOnlyComponent
+      class="server-only"
+      style="background-color: gray;"
+    />
+    <NuxtLink to="/big-page-1">
+      to big 1
+    </NuxtLink>
+    <NuxtLink to="/server-page">
+      to server page
+    </NuxtLink>
+    <NuxtLink to="/page-load-hook">
+      to page load hook
+    </NuxtLink>
   </div>
 </template>
 
 <script setup lang="ts">
 import { setupDevtoolsPlugin } from '@vue/devtools-api'
+import { toDisplayString } from 'vue'
 import { useRuntimeConfig } from '#imports'
 import { importedRE, importedValue } from '~/some-exports'
+import type { NuxtIsland, ServerOnlyComponent } from '#build/components'
+
+toDisplayString(useRoute())
 
 setupDevtoolsPlugin({}, () => {}) as any
-
+const island = ref<InstanceType<typeof ServerOnlyComponent>>()
 const config = useRuntimeConfig()
 
 const someValue = useState('val', () => 1)
 
-const NestedSugarCounter = resolveComponent('NestedSugarCounter')
-if (!NestedSugarCounter) {
+const NestedCounter = resolveComponent('NestedCounter')
+if (!NestedCounter) {
   throw new Error('Component not found')
 }
-
+useHead({
+  meta: [
+    {
+      name: 'author',
+      content: 'Nuxt',
+      key: 'testkey',
+    },
+    {
+      name: 'author',
+      content: 'Nuxt',
+      key: 'testkey',
+    },
+  ],
+  script: [
+    {
+      innerHTML: 'console.log("my script")',
+      key: 'my-script',
+    },
+    {
+      innerHTML: 'console.log("my script")',
+      key: 'my-script',
+    },
+  ],
+}, { key: 'testkey' })
 definePageMeta({
   alias: '/some-alias',
   other: ref('test'),
   imported: importedValue,
-  something: importedRE.test('an imported regex')
+  something: importedRE.test('an imported regex'),
 })
 
 // reset title template example
 useHead({
-  titleTemplate: ''
+  titleTemplate: '',
 })
 
 const foo = useFoo()

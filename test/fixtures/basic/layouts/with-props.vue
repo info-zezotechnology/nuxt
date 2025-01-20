@@ -1,10 +1,12 @@
 <template>
-  <p>{{ someProp }}</p>
-  <slot />
+  <div>
+    <p>{{ someProp }}</p>
+    <slot />
+  </div>
 </template>
 
 <script lang="ts" setup>
 defineProps<{
-  someProp: string;
+  someProp: string
 }>()
 </script>

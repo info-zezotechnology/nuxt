@@ -1,3 +1,5 @@
+<!-- eslint-disable vue/no-multiple-template-root -->
+
 <template>
   <div>Multiple</div>
   <div>elements</div>
@@ -5,6 +7,6 @@
 
 <script setup>
 definePageMeta({
-  pageTransition: false
+  pageTransition: false,
 })
 </script>

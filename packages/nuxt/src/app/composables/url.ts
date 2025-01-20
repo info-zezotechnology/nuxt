@@ -1,14 +1,10 @@
 import { getRequestURL } from 'h3'
-import { joinURL } from 'ufo'
 import { useRequestEvent } from './ssr'
-import { useRuntimeConfig } from '#app'
 
-export function useRequestURL () {
-  if (process.server) {
-    const { baseURL } = useRuntimeConfig().app
-    const url = getRequestURL(useRequestEvent())
-    url.pathname = joinURL(baseURL, url.pathname)
-    return url
+/** @since 3.5.0 */
+export function useRequestURL (opts?: Parameters<typeof getRequestURL>[1]) {
+  if (import.meta.server) {
+    return getRequestURL(useRequestEvent()!, opts)
   }
   return new URL(window.location.href)
 }
